@@ -9,7 +9,7 @@ const KEYBINDINGS = JSON.stringify({
 const ASPELL_OUT = '@(#) International Ispell Version 3.1.20\n& teh 3 0: the, tech, Te\n\n'
 
 const BAND = {
-  plugin: 'better-claude-spellcheck',
+  plugin: 'better-spellcheck',
   component: 'AbovePrompt',
   props: {
     hasSurvey: false,

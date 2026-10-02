@@ -1,4 +1,4 @@
-# better-claude-spellcheck
+# better-spellcheck
 
 A Claude Code mod that spellchecks the prompt box as you type.
 
@@ -62,8 +62,8 @@ Which words get flagged is decided by `hooks/words.txt` (aspell's en_US master l
 This directory is also a local marketplace (`.claude-plugin/marketplace.json`):
 
 ```bash
-claude plugin marketplace add ~/projects/better-claude-spellcheck
-claude plugin install better-claude-spellcheck@better-claude-spellcheck-local
+claude plugin marketplace add ~/projects/better-spellcheck
+claude plugin install better-spellcheck@better-spellcheck-local
 ```
 
 The marketplace points at this directory, so edits take effect on the next session start or after `/reload-plugins`.

@@ -14,7 +14,7 @@ import {
 } from './spell'
 import type { Misspelling } from './spell'
 
-const flaggedAtom = atom({ plugin: 'better-claude-spellcheck', key: 'flagged' } as const, [])
+const flaggedAtom = atom({ plugin: 'better-spellcheck', key: 'flagged' } as const, [])
 
 // The word lists decide what is flagged; aspell only supplies suggestions.
 const ASPELL_CANDIDATES = ['aspell', '/opt/homebrew/bin/aspell', '/usr/local/bin/aspell']
@@ -68,7 +68,7 @@ async function load($: EngineInterface): Promise<boolean> {
     await loadShortcuts($)
     return true
   } catch (error) {
-    $.ui.log(`better-claude-spellcheck: could not load the dictionary: ${String(error)}`)
+    $.ui.log(`better-spellcheck: could not load the dictionary: ${String(error)}`)
     return false
   }
 }
