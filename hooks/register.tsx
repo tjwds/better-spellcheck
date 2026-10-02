@@ -2,13 +2,14 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PromptDecoration, Register } from 'claude-code'
 
 import type { Flagged } from '../types'
+import { CHECKERS } from './checkers'
+import type { Checker } from './checkers'
 import { addShortcuts, FIX_ACTION, LEARN_ACTION, parseShortcuts } from './keys'
 import type { Shortcuts } from './keys'
 import {
   distinctWords,
   findMisspellings,
   lookup,
-  parseAspell,
   parseWordList,
   replaceMisspelling,
 } from './spell'
@@ -16,8 +17,6 @@ import type { Misspelling } from './spell'
 
 const flaggedAtom = atom({ plugin: 'better-spellcheck', key: 'flagged' } as const, [])
 
-// The word lists decide what is flagged; aspell only supplies suggestions.
-const ASPELL_CANDIDATES = ['aspell', '/opt/homebrew/bin/aspell', '/usr/local/bin/aspell']
 const SUGGESTION_DELAY_MS = 250
 const MAX_SUGGESTIONS = 3
 const MAX_SHOWN = 9
@@ -41,7 +40,8 @@ let dictionary = new Set<string>()
 let learned = new Set<string>()
 let isEnabled = true
 let loading: Promise<boolean> | undefined
-let aspellPath: string | null | undefined
+// The suggestion program that ran: unknown until first needed, null if none did.
+let checker: { checker: Checker; path: string } | null | undefined
 const suggestions = new Map<string, string[]>()
 let currentWords: string[] = []
 let lastPublished = '[]'
@@ -75,7 +75,9 @@ async function load($: EngineInterface): Promise<boolean> {
 }
 
 async function keybindingsPath($: EngineInterface): Promise<string> {
-  const dir = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${await $.env.get('HOME')}/.claude`
+  // Native Windows sets USERPROFILE and usually not HOME.
+  const home = (await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE'))
+  const dir = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${home}/.claude`
   return `${dir}/keybindings.json`
 }
 
@@ -117,13 +119,13 @@ async function saveLearned($: EngineInterface) {
   await $.store.set('learned', [...learned].sort())
 }
 
-// Shares the draft's misspelled words with the band, and asks aspell for
+// Shares the draft's misspelled words with the band, and asks the checker for
 // suggestions for any it hasn't seen once typing pauses.
 async function publish($: EngineInterface, found: readonly Misspelling[]) {
   currentWords = distinctWords(found)
   await publishFlagged($)
   const missing = currentWords.filter(w => !suggestions.has(w.toLowerCase()))
-  if (missing.length === 0 || aspellPath === null) return
+  if (missing.length === 0 || checker === null) return
   pending?.cancel()
   pending = $.clock.after(SUGGESTION_DELAY_MS, () => {
     pending = undefined
@@ -142,37 +144,45 @@ async function publishFlagged($: EngineInterface) {
   await update($, flaggedAtom, () => flagged)
 }
 
-async function runAspell($: EngineInterface, stdin: string): Promise<string | null> {
-  const candidates = aspellPath ? [aspellPath] : ASPELL_CANDIDATES
-  for (const path of candidates) {
+// Runs the suggestion program on `words`. The first time, tries each in
+// CHECKERS until one runs; after that, only that one.
+async function runChecker($: EngineInterface, words: readonly string[]) {
+  const options = checker ? [checker] : CHECKERS.flatMap(c => c.paths.map(path => ({ checker: c, path })))
+  for (const option of options) {
+    const stdin = option.checker.stdin(words)
     try {
-      const { exitCode, stdout } = await $.process.run([path, '-a', '--lang=en_US'], {
-        stdin,
+      const { exitCode, stdout } = await $.process.run([option.path, ...option.checker.args(words)], {
+        ...(stdin === undefined ? {} : { stdin }),
         timeoutMs: 5000,
       })
       if (exitCode !== 0) continue
-      aspellPath = path
-      return stdout
+      checker = option
+      return option.checker.parse(stdout)
     } catch {
       // Not installed at this path; try the next one.
     }
   }
-  aspellPath = null
+  if (checker === undefined) checker = null
   return null
 }
 
 async function fetchSuggestions($: EngineInterface) {
   const missing = currentWords.filter(w => !suggestions.has(w.toLowerCase()))
   if (missing.length === 0) return
-  // `^` makes aspell treat each line as text, never as a command.
-  const stdout = await runAspell($, missing.map(w => `^${w.replace(/’/g, "'")}\n`).join(''))
-  if (stdout === null) return
-  const parsed = parseAspell(stdout)
-  for (const word of missing) {
-    const found = parsed.get(word.replace(/’/g, "'")) ?? []
-    suggestions.set(word.toLowerCase(), found.slice(0, MAX_SUGGESTIONS))
-  }
+  const asked = missing.map(w => w.replace(/’/g, "'"))
+  const parsed = await runChecker($, asked)
+  if (parsed === null) return
+  missing.forEach((word, i) => {
+    suggestions.set(word.toLowerCase(), (parsed.get(asked[i]!) ?? []).slice(0, MAX_SUGGESTIONS))
+  })
   await publishFlagged($)
+}
+
+async function describeChecker($: EngineInterface): Promise<string> {
+  if (checker === undefined) await runChecker($, [])
+  return checker
+    ? `Suggestions come from ${checker.checker.name} (${checker.path}).`
+    : 'No suggestion program found: install aspell or hunspell with an en_US dictionary. Misspellings are still underlined.'
 }
 
 // Puts new text in the prompt box with its misspellings underlined.
@@ -208,7 +218,11 @@ async function runCommand($: EngineInterface, args: string): Promise<string> {
   const words = rest.map(w => w.toLowerCase())
   switch (action.toLowerCase()) {
     case '':
-      return `Spellcheck is ${isEnabled ? 'on' : 'off'}; ${learned.size} word(s) in your dictionary.\n${USAGE}`
+      return [
+        `Spellcheck is ${isEnabled ? 'on' : 'off'}; ${learned.size} word(s) in your dictionary.`,
+        await describeChecker($),
+        USAGE,
+      ].join('\n')
     case 'on':
       await setEnabled($, true)
       return 'Spellcheck is on.'

@@ -48,8 +48,10 @@ test('underlines a misspelling once the word is finished, and the band offers th
     if (e.path === '/cfg/keybindings.json') return { value: KEYBINDINGS }
     return { value: e.path.endsWith('/words.txt') ? WORDS : '# none\n' }
   })
+  // Not macOS: no osascript, so aspell is the checker.
   const runs: string[][] = []
   on('process.run', ($, e) => {
+    if (e.argv[0] === '/usr/bin/osascript') return { deny: 'ENOENT' }
     runs.push([...e.argv])
     return ran(ASPELL_OUT)
   })
@@ -82,7 +84,7 @@ test('underlines a misspelling once the word is finished, and the band offers th
   expect(runs).toEqual([])
   await clock.advance(250)
   expect(runs.length).toBe(1)
-  expect(runs[0]).toContain('-a')
+  expect(runs[0]).toEqual(['aspell', '-a', '--lang=en_US'])
 
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   // A plain button, so the terminal shows its key: `1: teh → the`.
@@ -168,7 +170,8 @@ test('without aspell, words are still underlined and the band lists them', async
   const box = await typeInto($, { text: '', start: 0, end: 0, inputText: 'the qwzx fox' })
   expect(box.decorations).toMatchObject([{ start: 4, end: 8 }])
   await clock.advance(250)
-  expect(attempts).toBe(3)
+  // osascript, then aspell and hunspell at each of their three paths.
+  expect(attempts).toBe(7)
 
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: 'qwzx' })).toBeDefined()
@@ -179,8 +182,103 @@ test('without aspell, words are still underlined and the band lists them', async
 
   expect(learned).toEqual(['qwzx'])
 
-  // aspell is not looked for again this session.
+  // Nothing is looked for again this session.
   await typeInto($, { text: 'the qwzx fox', start: 12, end: 12, inputText: ' blorp ' })
   await clock.advance(250)
-  expect(attempts).toBe(3)
+  expect(attempts).toBe(7)
+})
+
+// Fires prompt.edit for a whole draft typed at once, then lets the
+// suggestion timer run.
+async function typeAndWait($: unknown, clock: { advance: (ms: number) => Promise<void> }, text: string) {
+  const box = await typeInto($, { text: '', start: 0, end: 0, inputText: text })
+  await clock.advance(250)
+  return box
+}
+
+const EDIT = ($: unknown, e: Edit) => ({
+  text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end),
+  cursor: e.start + e.inputText.length,
+})
+
+test('on macOS, suggestions come from the built-in spell checker', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on, {})
+  on('fs.read', ($, e) => ({ value: e.path.endsWith('/words.txt') ? WORDS : '' }))
+  const runs: string[][] = []
+  on('process.run', ($, e) => {
+    runs.push([...e.argv])
+    const words = e.argv.slice(5)
+    return ran(JSON.stringify(Object.fromEntries(words.map(w => [w, w === 'teh' ? ['the', 'ten'] : []]))))
+  })
+  on('prompt.edit', EDIT)
+  on('ui.render', () => ({ type: 'Text', props: {}, children: ['drawn by Claude Code'] }))
+
+  await typeAndWait($, clock, 'the teh fox ')
+  expect(runs.length).toBe(1)
+  expect(runs[0]?.slice(0, 4)).toEqual(['/usr/bin/osascript', '-l', 'JavaScript', '-e'])
+  expect(runs[0]?.slice(5)).toEqual(['teh'])
+
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await ui.find({ key: 'fix-1' })).toMatchObject({ props: { label: 'teh → the' } })
+  await ui.unmount()
+
+  const status = await spellcheck($, '')
+  expect(status.text).toContain('Suggestions come from the macOS spell checker (/usr/bin/osascript).')
+})
+
+test('without osascript or a working aspell, hunspell supplies suggestions', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on, {})
+  on('fs.read', ($, e) => ({ value: e.path.endsWith('/words.txt') ? WORDS : '' }))
+  const runs: string[][] = []
+  on('process.run', ($, e) => {
+    runs.push([...e.argv])
+    if (e.argv[0] === '/usr/bin/osascript') return { deny: 'ENOENT' }
+    // aspell is installed but has no en_US dictionary.
+    if (e.argv[0]!.endsWith('aspell')) return { value: { ...ran('').value, exitCode: 1 } }
+    return ran(ASPELL_OUT)
+  })
+  on('prompt.edit', EDIT)
+  on('ui.render', () => ({ type: 'Text', props: {}, children: ['drawn by Claude Code'] }))
+
+  await typeAndWait($, clock, 'the teh fox ')
+  expect(runs.at(-1)).toEqual(['hunspell', '-a', '-d', 'en_US'])
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await ui.find({ key: 'fix-1' })).toMatchObject({ props: { label: 'teh → the' } })
+  await ui.unmount()
+
+  // Once found, only hunspell runs.
+  const before = runs.length
+  await typeAndWait($, clock, 'the teh fox and recieve ')
+  expect(runs.slice(before)).toEqual([['hunspell', '-a', '-d', 'en_US']])
+
+  const status = await spellcheck($, '')
+  expect(status.text).toContain('Suggestions come from hunspell (hunspell).')
+})
+
+test('/spellcheck says when no suggestion program is installed', async ($, on) => {
+  mock.store(on, {})
+  on('fs.read', ($, e) => ({ value: e.path.endsWith('/words.txt') ? WORDS : '' }))
+  on('process.run', () => ({ deny: 'ENOENT' }))
+  const status = await spellcheck($, '')
+  expect(status.text).toContain('No suggestion program found: install aspell or hunspell')
+})
+
+test('keybindings.json is found under USERPROFILE when HOME is unset (Windows)', async ($, on) => {
+  mock.store(on, {})
+  mock.env(on, { USERPROFILE: 'C:\\Users\\pat' })
+  on('fs.read', ($, e) => ({ value: e.path.endsWith('/words.txt') ? WORDS : '' }))
+  on('fs.exists', () => ({ value: false }))
+  const written: string[] = []
+  on('fs.write', ($, e) => {
+    written.push(e.path)
+    return { value: undefined }
+  })
+  const answer = await spellcheck($, 'keys')
+  // The kit runs on POSIX, where it resolves a C:\\ path against the working
+  // directory; on Windows the path is absolute and stands as is.
+  expect(written.length).toBe(1)
+  expect(written[0]!.endsWith('C:\\Users\\pat/.claude/keybindings.json')).toBe(true)
+  expect(answer.text).toBe('Bound ctrl+x f and ctrl+x a in C:\\Users\\pat/.claude/keybindings.json.')
 })

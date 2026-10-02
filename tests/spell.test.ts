@@ -9,6 +9,7 @@ import {
   parseWordList,
   replaceMisspelling,
 } from '../hooks/spell'
+import { parseMacGuesses } from '../hooks/checkers'
 
 const WORDS = new Set(['the', 'quick', 'brown', 'fox', 'joe', "don't", 'receive', 'is', 'a', 'it'])
 const known = (w: string) => lookup(WORDS, w)
@@ -74,6 +75,17 @@ describe('helpers', () => {
     expect(parsed.get('teh')).toEqual(['the', 'tech', 'Te'])
     expect(parsed.get('xqzzvvq')).toEqual([])
     expect(parsed.size).toBe(2)
+  })
+
+  test('parseMacGuesses reads the osascript JSON and tolerates junk', () => {
+    expect(parseMacGuesses('{"teh":["the","ten"],"zzq":[]}\n')).toEqual(
+      new Map([
+        ['teh', ['the', 'ten']],
+        ['zzq', []],
+      ]),
+    )
+    expect(parseMacGuesses('execution error: -1743')).toEqual(new Map())
+    expect(parseMacGuesses('{"teh":"the","x":[1,"y"]}')).toEqual(new Map([['x', ['y']]]))
   })
 
   test('matchCase capitalizes to match the original', () => {

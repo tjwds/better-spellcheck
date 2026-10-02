@@ -30,14 +30,34 @@ claude plugin install better-spellcheck@better-spellcheck-local
 # 3. Bind ctrl+x f and ctrl+x a in your keybindings.json
 claude -p "/spellcheck keys"
 
-# 4. For suggestions, install aspell (macOS shown; on Debian/Ubuntu: sudo apt install aspell aspell-en)
-brew install aspell
+# 4. Check where suggestions will come from
+claude -p "/spellcheck"
 ```
 
 Then start a new Claude Code session, or run `/reload-plugins` in an open one.
 
 - **Step 3** adds two bindings to the `Chat` block of `keybindings.json` in your config directory (`$CLAUDE_CONFIG_DIR`, or `~/.claude`). It creates the file if there isn't one, and doesn't change your other bindings. If `ctrl+x f` or `ctrl+x a` is already bound to something else, it leaves that key alone and tells you.
-- **Without aspell**, misspellings are still underlined and listed, but with no suggested fix; `ctrl+x a` still works.
+- **Step 4** prints a line such as `Suggestions come from the macOS spell checker`. If it says `No suggestion program found`, see [Platforms](#platforms).
+
+## Platforms
+
+Spotting misspellings works everywhere with nothing else installed: the word list ships with the mod. Suggested fixes come from the first of these that runs:
+
+1. **The macOS spell checker**, the one TextEdit uses, through `osascript`. Built into macOS.
+2. **aspell**, with an English dictionary
+3. **hunspell**, with an `en_US` dictionary
+
+| Platform | For suggestions |
+| --- | --- |
+| macOS | Nothing to install |
+| Debian, Ubuntu | `sudo apt install hunspell hunspell-en-us` (or `aspell aspell-en`) |
+| Fedora | `sudo dnf install hunspell hunspell-en-US` (or `aspell aspell-en`) |
+| Arch | `sudo pacman -S hunspell hunspell-en_us` (or `aspell aspell-en`) |
+| Windows | hunspell with an `en_US` dictionary, on your `PATH` |
+
+Without any of them, misspellings are still underlined and listed in the band, without a suggested fix; `ctrl+x a` still works. Run `/spellcheck` to see which one the mod found.
+
+The mod looks for `aspell` and `hunspell` on your `PATH`, then in `/opt/homebrew/bin` and `/usr/local/bin`.
 
 To update, run `git pull` in the clone, then `/reload-plugins`. The marketplace points at the clone, so don't move or delete it. To uninstall, run `claude plugin marketplace remove better-spellcheck-local`.
 
@@ -57,7 +77,7 @@ A word with no suggestion is listed in red without a number. Anything other mods
 
 | Command | What it does |
 | --- | --- |
-| `/spellcheck` | Show whether checking is on, and the usage |
+| `/spellcheck` | Show whether checking is on, where suggestions come from, and the usage |
 | `/spellcheck on`, `/spellcheck off` | Turn checking on or off; remembered across sessions |
 | `/spellcheck add <word…>` | Add words to your personal dictionary |
 | `/spellcheck remove <word…>` | Remove words from your personal dictionary |
@@ -94,11 +114,11 @@ To use other keys, change them in `keybindings.json`; the band shows whichever k
 | --- | --- |
 | Underlines | A `prompt.edit` hook returns `decorations` for each unknown word, in `ansi256(1)`: palette slot 1, the terminal's own red |
 | Band | `ui.render` on `AbovePrompt`, reading a `$.state` value the edit hook writes |
-| Suggestions | `aspell -a` through `$.process.run`, 250 ms after typing pauses, cached per word |
+| Suggestions | `osascript` (NSSpellChecker), `aspell -a` or `hunspell -a` through `$.process.run`, 250 ms after typing pauses, cached per word |
 | Fixes | `$.prompt.read` + `$.prompt.fill`, from Buttons with a `hotkey` and an `action` |
 | Dictionary, on/off | `$.store` |
 
-What gets flagged is decided by `hooks/words.txt` (aspell's en_US master list, 123,679 words including inflections), `hooks/extra-words.txt` (software terms), and your personal dictionary. aspell only supplies suggestions.
+What gets flagged is decided by `hooks/words.txt` (aspell's en_US master list, 123,679 words including inflections), `hooks/extra-words.txt` (software terms), and your personal dictionary, the same on every platform. The suggestion programs only supply fixes.
 
 The underline is drawn in the same color as the word: decorations have no separate underline color.
 
@@ -108,8 +128,9 @@ The underline is drawn in the same color as the word: decorations have no separa
 | --- | --- |
 | `hooks/register.tsx` | The hooks |
 | `hooks/spell.ts` | Tokenizing, lookup, aspell parsing, replacement |
+| `hooks/checkers.ts` | The suggestion programs, in the order they're tried |
 | `hooks/keys.ts` | The borrowed actions, reading and adding their keybindings |
-| `hooks/words.txt` | The word list; regenerate with `scripts/build-dictionary.sh` |
+| `hooks/words.txt` | The word list; regenerate with `scripts/build-dictionary.sh` (needs aspell) |
 | `hooks/extra-words.txt` | Extra technical words, one per line |
 | `tests/` | Run with `claude plugin test .` |
 
