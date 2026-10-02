@@ -24,7 +24,7 @@ git clone https://github.com/tjwds/better-spellcheck.git
 cd better-spellcheck
 
 # 2. Install the mod (the repo is its own plugin marketplace)
-claude plugin marketplace add .
+claude plugin marketplace add ./
 claude plugin install better-spellcheck@better-spellcheck-local
 
 # 3. Bind ctrl+x f and ctrl+x a in your keybindings.json
