@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PromptDecoration, Register } from 'claude-code'
 
 import type { Flagged } from '../types'
-import { FIX_ACTION, LEARN_ACTION, parseShortcuts } from './keys'
+import { addShortcuts, FIX_ACTION, LEARN_ACTION, parseShortcuts } from './keys'
 import type { Shortcuts } from './keys'
 import {
   distinctWords,
@@ -27,11 +27,12 @@ const MAX_SHOWN = 9
 const RED = 'ansi256(1)'
 
 const USAGE = [
-  'Usage: /spellcheck [on | off | add <word…> | remove <word…> | list]',
+  'Usage: /spellcheck [on | off | add <word…> | remove <word…> | list | keys]',
   '  on, off          turn checking on or off (remembered across sessions)',
   '  add <word…>      add words to your personal dictionary',
   '  remove <word…>   remove words from your personal dictionary',
   '  list             show your personal dictionary',
+  '  keys             bind ctrl+x f (fix) and ctrl+x a (add) in your keybindings.json',
 ].join('\n')
 
 // Module state: rebuilt when the module reloads; `$.store` keeps the
@@ -73,14 +74,38 @@ async function load($: EngineInterface): Promise<boolean> {
   }
 }
 
+async function keybindingsPath($: EngineInterface): Promise<string> {
+  const dir = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${await $.env.get('HOME')}/.claude`
+  return `${dir}/keybindings.json`
+}
+
 // The keys bound to the band's actions, so its hint names the real ones.
 async function loadShortcuts($: EngineInterface) {
   try {
-    const dir = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${await $.env.get('HOME')}/.claude`
-    shortcuts = parseShortcuts(await $.fs.read(`${dir}/keybindings.json`))
+    shortcuts = parseShortcuts(await $.fs.read(await keybindingsPath($)))
   } catch {
     shortcuts = {}
   }
+}
+
+// Binds the band's actions in keybindings.json, keeping everything else there.
+// Claude Code picks up the change without a restart.
+async function setUpKeys($: EngineInterface): Promise<string> {
+  const path = await keybindingsPath($)
+  const existing = (await $.fs.exists(path)) ? await $.fs.read(path) : undefined
+  const update = addShortcuts(existing)
+  if (!update.ok) {
+    return `${path} was left unchanged: ${update.reason}. Add these to its "Chat" bindings by hand:\n  "ctrl+x f": "${FIX_ACTION}",\n  "ctrl+x a": "${LEARN_ACTION}"`
+  }
+  if (update.added.length > 0) await $.fs.write(path, update.text)
+  await loadShortcuts($)
+  const lines = [
+    update.added.length > 0 && `Bound ${update.added.join(' and ')} in ${path}.`,
+    update.kept.length > 0 && `Already bound: ${update.kept.join(', ')}.`,
+    update.conflicts.length > 0 &&
+      `Not bound, as ${update.conflicts.join(' and ')} already ${update.conflicts.length > 1 ? 'do' : 'does'} something else in ${path}; bind ${FIX_ACTION} / ${LEARN_ACTION} to other keys there.`,
+  ].filter(Boolean)
+  return lines.join('\n')
 }
 
 function ensureLoaded($: EngineInterface): Promise<boolean> {
@@ -203,6 +228,8 @@ async function runCommand($: EngineInterface, args: string): Promise<string> {
         ? `Removed from your dictionary: ${removed.join(', ')}`
         : 'None of those words are in your dictionary.'
     }
+    case 'keys':
+      return setUpKeys($)
     case 'list':
       return learned.size
         ? `Your dictionary (${learned.size}): ${[...learned].sort().join(', ')}`
@@ -217,7 +244,7 @@ export const register: Register = on => {
     await $.command.register({
       name: 'spellcheck',
       description: 'Spellcheck the prompt: turn it on or off, or manage your dictionary',
-      argumentHint: '[on|off|add <word>|remove <word>|list]',
+      argumentHint: '[on|off|add <word>|remove <word>|list|keys]',
       immediate: true,
     })
     void ensureLoaded($)
