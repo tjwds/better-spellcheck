@@ -1,0 +1,14 @@
+{
+  "name": "better-claude-spellcheck-local",
+  "description": "Local marketplace for the better-claude-spellcheck mod",
+  "owner": {
+    "name": "Joe"
+  },
+  "plugins": [
+    {
+      "name": "better-claude-spellcheck",
+      "source": "./",
+      "description": "Underlines misspelled words in the prompt as you type, with aspell suggestions in a band above the prompt"
+    }
+  ]
+}
